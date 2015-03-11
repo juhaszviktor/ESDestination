@@ -47,7 +47,6 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 
 	Client client;
 	String cluster;
-	String type;
 	int port;
 	String server;
 
@@ -63,6 +62,8 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	LogTemplate messageTemplate;
 	String indexTemplateString;
 	LogTemplate indexTemplate;
+	String typeTemplateString;
+	LogTemplate typeTemplate;
 	String customIdTemplateString;
 	LogTemplate customIdTemplate;
 
@@ -100,11 +101,11 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 		String formattedMessage = messageTemplate.format(msg);
 		if (customIdTemplate != null) {
 			bulkRequest.add(client.prepareIndex(indexTemplate.format(msg),
-					type, customIdTemplate.format(msg)).setSource(
+					typeTemplate.format(msg), customIdTemplate.format(msg)).setSource(
 					formattedMessage));
 		} else {
 			bulkRequest.add(client
-					.prepareIndex(indexTemplate.format(msg), type).setSource(
+					.prepareIndex(indexTemplate.format(msg), typeTemplate.format(msg)).setSource(
 							formattedMessage));
 		}
 		msg_count++;
@@ -133,6 +134,7 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 		flush();
 		messageTemplate.release();
 		indexTemplate.release();
+		typeTemplate.release();
 		if (customIdTemplate != null) {
 			customIdTemplate.release();
 		}
@@ -191,13 +193,14 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	private void readOptions() {
 		indexTemplateString = getOption("index");
 		customIdTemplateString = getOption("custom_id");
-		type = getOption("type");
+		typeTemplateString = getOption("type");
 		cluster = getOption("cluster");
 		String localserver = getOption("server");
 		String localport = getOption("port");
 		String localflush_limit = getOption("flush_limit");
 		String localMessageTemplateString = getOption("message_template");
 		String localClientMode = getOption("client_mode");
+
 		if (localserver != null) {
 			server = localserver;
 		}
@@ -226,7 +229,7 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 			result = false;
 		}
 
-		if (type == null) {
+		if (typeTemplateString == null) {
 			InternalMessageSender.error("Required option is missing: type");
 			result = false;
 		}
@@ -236,12 +239,14 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 
 	private boolean compileTemplates() {
 		return messageTemplate.compile(messageTemplateString)
-				&& indexTemplate.compile(indexTemplateString);
+				&& indexTemplate.compile(indexTemplateString)
+				&& typeTemplate.compile(typeTemplateString);
 	}
 
 	private void createTemplates() {
 		messageTemplate = new LogTemplate(getConfigHandle());
 		indexTemplate = new LogTemplate(getConfigHandle());
+		typeTemplate = new LogTemplate(getConfigHandle());
 	}
 
 	private boolean initCustomId() {
