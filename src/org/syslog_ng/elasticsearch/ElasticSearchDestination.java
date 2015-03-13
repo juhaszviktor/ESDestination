@@ -258,9 +258,9 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	}
 
 	private Client createClient() {
-		if (clientMode == "transport") {
+		if (clientMode.equals("transport")) {
 			return createTransportClient();
-		} else if (clientMode == "node") {
+		} else if (clientMode.equals("node")) {
 			return createNodeClient();
 		}
 		throw new ElasticsearchException("Invalid client mode: " + clientMode);
