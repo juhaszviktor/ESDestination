@@ -34,7 +34,11 @@ import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequestBuilder
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
 import org.elasticsearch.action.bulk.BulkResponse;
+import org.elasticsearch.action.bulk.BulkProcessor;
+import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
@@ -53,10 +57,10 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	Settings settings;
 	int msg_count;
 	int flush_limit;
-	BulkRequestBuilder bulkRequest;
 	boolean opened;
 	String clientMode;
 	Node node;
+	BulkProcessor bulkProcessor;
 
 	String messageTemplateString;
 	LogTemplate messageTemplate;
@@ -82,7 +86,10 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	protected boolean init() {
 		readOptions();
 		createTemplates();
-		return checkRequiredOptions() && compileTemplates() && initCustomId();
+		boolean result = checkRequiredOptions() && compileTemplates() && initCustomId();
+		open();
+		InternalMessageSender.error("Init done");
+		return result;
 	}
 
 	@Override
@@ -100,27 +107,21 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	protected boolean send(LogMessage msg) {
 		String formattedMessage = messageTemplate.format(msg);
 		if (customIdTemplate != null) {
-			bulkRequest.add(client.prepareIndex(indexTemplate.format(msg),
-					typeTemplate.format(msg), customIdTemplate.format(msg)).setSource(
+			bulkProcessor.add(new IndexRequest(indexTemplate.format(msg),
+					typeTemplate.format(msg), customIdTemplate.format(msg)).source(
 					formattedMessage));
 		} else {
-			bulkRequest.add(client
-					.prepareIndex(indexTemplate.format(msg), typeTemplate.format(msg)).setSource(
+			bulkProcessor.add(new IndexRequest(indexTemplate.format(msg), typeTemplate.format(msg)).source(
 							formattedMessage));
 		}
-		msg_count++;
-
-		if (msg_count >= flush_limit) {
-			return flush();
-		} else {
-			return true;
-		}
+		return true;
 	}
 
 	@Override
 	protected void close() {
 		if (opened) {
-			flush();
+			bulkProcessor.flush();
+			bulkProcessor.close();
 			client.close();
 			if (node != null) {
 				node.close();
@@ -131,7 +132,6 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 
 	@Override
 	protected void deinit() {
-		flush();
 		messageTemplate.release();
 		indexTemplate.release();
 		typeTemplate.release();
@@ -140,21 +140,30 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 		}
 	}
 
-	private boolean flush() {
-		boolean result = true;
-		if ((bulkRequest != null) && (bulkRequest.numberOfActions() > 0)) {
-			BulkResponse bulkResponse = (BulkResponse) bulkRequest.execute()
-					.actionGet();
-			if (bulkResponse.hasFailures()) {
-				InternalMessageSender.error("Bulk insert failed: "
-						+ bulkResponse.buildFailureMessage());
-				result = false;
-			}
-			bulkRequest = client.prepareBulk();
-			msg_count = 0;
-		}
-		return result;
+	private void createBulkProcessor() {
+		bulkProcessor = BulkProcessor.builder(
+			client,
+			new BulkProcessor.Listener() {
+				public void beforeBulk(long executionId,
+					BulkRequest request) {
+                }
 
+				public void afterBulk(long executionId,
+					BulkRequest request,
+					BulkResponse response) {
+				}
+
+				public void afterBulk(long executionId,
+					BulkRequest request,
+					Throwable failure) {
+					System.out.println("After bulk failed: " + failure);
+				}
+			}
+		)
+		.setBulkActions(flush_limit)
+		.setFlushInterval(new TimeValue(1000))
+		.setConcurrentRequests(1)
+		.build();
 	}
 
 	private boolean initConnection() {
@@ -181,7 +190,7 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 				}
 			}
 			InternalMessageSender.debug("Ok");
-			bulkRequest = client.prepareBulk();
+			createBulkProcessor();
 		} catch (ElasticsearchException e) {
 			System.out.println("Something evil happened: " + e.getMessage());
 			e.printStackTrace(System.out);
