@@ -64,7 +64,6 @@ destination d_es {
     option("type", "test")
     option("cluster", "syslog-ng")
     option("flush_limit", "100")
-    option("custom_id", "$RCPTID")
   );
 };
 
