@@ -23,31 +23,34 @@
 
 package org.syslog_ng.elasticsearch;
 
-import org.syslog_ng.InternalMessageSender;
 import org.syslog_ng.LogMessage;
 import org.syslog_ng.StructuredLogDestination;
+import org.syslog_ng.elasticsearch.client.ESClient;
+import org.syslog_ng.elasticsearch.client.ESClientFactory;
+import org.syslog_ng.elasticsearch.client.UnknownESClientModeException;
+import org.syslog_ng.elasticsearch.logging.InternalLogger;
+import org.syslog_ng.elasticsearch.logging.SyslogNgInternal;
+import org.syslog_ng.elasticsearch.messageprocessor.ESMessageProcessor;
+import org.syslog_ng.elasticsearch.messageprocessor.ESMessageProcessorFactory;
+import org.syslog_ng.elasticsearch.options.ElasticSearchOptions;
+import org.syslog_ng.elasticsearch.options.InvalidOptionException;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
-
 import org.elasticsearch.action.index.IndexRequest;
 
 public class ElasticSearchDestination extends StructuredLogDestination {
 
 	ESClient client;
 	ESMessageProcessor msgProcessor;
-	
-	boolean opened;
-	
-
 	ElasticSearchOptions options;
-	
+
+	boolean opened;
+
 	public ElasticSearchDestination(long handle) {
 		super(handle);
-		Logger.getRootLogger().setLevel(Level.OFF);		
-		opened = false;
+		Logger.getRootLogger().setLevel(Level.OFF);
+		InternalLogger.setLogger(new SyslogNgInternal());
 		options = new ElasticSearchOptions(this);
-		client = ESClientFactory.getESClient(options);
-		msgProcessor = ESMessageProcessorFactory.getMessageProcessor(options, client);
 	}
 
 	@Override
@@ -55,13 +58,18 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 		boolean result = false;
 		try {
 			options.init();
+			client = ESClientFactory.getESClient(options);
+			msgProcessor = ESMessageProcessorFactory.getMessageProcessor(options, client);
+			client.init();
+			if (options.getClientMode().equals(ElasticSearchOptions.CLIENT_MODE_TRANSPORT) && options.getFlushLimit() > 1) {
+				InternalLogger.warning("Using transport client mode with bulk message processing (flush_limit > 1) can cause high message dropping rate in case of connection broken, using node client mode is suggested");
+			}
 			result = true;
 		}
-		catch (OptionException e){
-			InternalMessageSender.error(e.getMessage());
+		catch (InvalidOptionException | UnknownESClientModeException e){
+			InternalLogger.error(e.getMessage());
+			return false;
 		}
-		open();
-		InternalMessageSender.debug("Init done");
 		return result;
 	}
 
@@ -73,27 +81,33 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	@Override
 	protected boolean open() {
 		opened = client.open();
+		msgProcessor.init();
 		return opened;
 	}
-	
-    protected IndexRequest createIndexRequest(LogMessage msg) {
-    	String formattedMessage = options.getOption(ElasticSearchOptions.MESSAGE_TEMPLATE).getResolvedString(msg);
-		String customId = options.getOption(ElasticSearchOptions.CUSTOM_ID).getResolvedString(msg);
-		String index = options.getOption(ElasticSearchOptions.INDEX).getResolvedString(msg);
-		String type = options.getOption(ElasticSearchOptions.TYPE).getResolvedString(msg);
+
+    private IndexRequest createIndexRequest(LogMessage msg) {
+    	String formattedMessage = options.getMessageTemplate().getResolvedString(msg);
+		String customId = options.getCustomId().getResolvedString(msg);
+		String index = options.getIndex().getResolvedString(msg);
+		String type = options.getType().getResolvedString(msg);
+		InternalLogger.debug("Outgoing log entry, json='" + formattedMessage + "'");
 	    return new IndexRequest(index, type, customId).source(formattedMessage);
     }
 
 	@Override
 	protected boolean send(LogMessage msg) {
-		return msgProcessor.process(createIndexRequest(msg));
+		if (!client.isOpened()) {
+			close();
+			return false;
+		}
+		return msgProcessor.send(createIndexRequest(msg));
 	}
 
 	@Override
 	protected void close() {
 		if (opened) {
 			msgProcessor.flush();
-			msgProcessor.close();
+			msgProcessor.deinit();
 			client.close();
 			opened = false;
 		}
@@ -101,6 +115,7 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 
 	@Override
 	protected void deinit() {
+		client.deinit();
 		options.deinit();
 	}
 }
