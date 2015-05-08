@@ -1,0 +1,32 @@
+apply plugin: 'java'
+apply plugin: 'eclipse'
+
+def installDir = hasProperty('installDir') ? installDir : "/home/jviktor/work/"
+def syslogDepsDir = hasProperty('syslogDepsDir') ? syslogDepsDir : "/usr/lib/syslog-ng/3.7/SyslogNg.jar"
+
+
+repositories {
+    mavenCentral()
+    flatDir {
+       dirs syslogDepsDir
+    }
+}
+
+task install(type: Copy) {
+    from("build/libs")
+    include("*.jar")
+    into("$installDir/")
+}
+
+task installDeps(type: Copy) {
+    into("$installDir/")
+    from configurations.testRuntime
+}
+
+dependencies {
+    compile "org.elasticsearch:elasticsearch:1.5.2"
+    compile "log4j:log4j:1.2.17"
+    compile name: 'SyslogNg'
+    compile 'junit:junit:4.12'
+    compile 'org.hamcrest:hamcrest-core:1.3'
+}
